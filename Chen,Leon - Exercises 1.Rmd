@@ -1,0 +1,403 @@
+---
+title: 'STA 380: Part 2, Exercises 1'
+author: "Leon Chen"
+output:
+  word_document: default
+  html_document:
+    highlight: tango
+    theme: united
+---
+
+## Exploratory Analysis
+
+Load required libraries:
+```{r,message=F} 
+library(rmarkdown)
+library(gbm)
+library(ggplot2)
+```
+
+Load required data:
+```{r}
+georgia = read.csv("https://raw.githubusercontent.com/jgscott/STA380/adad8c24bed24f02ce13fd37f36f95755a32308f/data/georgia2000.csv",header=TRUE)
+attach(georgia)
+```
+
+```{r}
+#Define undercount as a percentage of ballots
+undercount = ballots - votes
+undercountperc = undercount/ballots
+```
+
+```{r}
+plot(equip, undercountperc,ylab="undercount percentage")
+``` 
+
+A plot of undercount percentage vs. the voting equipment doesn't seem very enlightening, as
+the undercount percentage means for each method are more or less the same.
+
+```{r}
+plot(as.factor(poor),undercountperc,xlab = "poor",ylab = "undercount percentage")
+```
+
+When we plot undercount percentage vs. poor, we can see that the mean for counties marked as 
+poor(over 25% of the residents live below 1.5 times the federal poverty line) is significantly
+higher than those not marked as poor. The mean undercount percentage for poor counties is actually
+greater than the undercount percentage for 75% of non-poor counties.
+
+```{r}
+qplot(perAA,undercountperc,size=I(2.5))
+```
+
+A plot of percentage undercount vs. percent African american doesn't seem to exhibit and relationships,
+as there seems to be no patterns in the plot. 
+
+```{r}
+plot(as.factor(poor),equip,xlab = "poor", ylab = "equip")
+```
+
+When we plot the poor factor vs. the equipment, we can see that the majority of poor counties
+use the lever method and the majority of non-poor counties use the optical method. This suggests
+that the voting equipment might actually affect the undercount percentage. Specifically, the lever
+method could be responsible for the increased undercount.
+
+```{r}
+qplot(perAA,as.factor(equip),col=as.factor(poor),xlab = "perAA",ylab="equip", size=I(2)) + scale_color_brewer(palette="Dark2")#scale_color_manual(values = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"))
+```
+
+This plot of equipment vs. perAA colored by the poor factor is extremely useful. From it, we essentially
+see a summary of all our previous plots. We see that poor counties use the lever method the most, 
+and that these counties also have a high percentage of African Americans.
+
+In conclusion, it appears that poor counties definitely have a higher undercount percentage. Over half of
+these counties also use the lever equipment to vote, and have a high percentage of African Americans. Thus, we can say that certain kinds of voting equipment(lever) leads to higher undercount percentage, with its effects amplified in poor communities with high percentages of African Americans.
+
+
+## Bootstrapping
+Load required libraries:
+```{r,message=F}
+library(fImport)
+library(mosaic)
+library(foreach)
+```
+
+Fetch five years of data on these ETFs.
+```{r}
+mystocks = c("SPY","TLT","LQD","EEM","VNQ")
+myprices = yahooSeries(mystocks,from ='2010-01-01', to='2015-07-30')
+```
+
+Formula to calculate percent returns:
+```{r}
+YahooPricesToReturns = function(series) {
+	mycols = grep('Adj.Close', colnames(series))
+	closingprice = series[,mycols]
+	N = nrow(closingprice)
+	percentreturn = as.data.frame(closingprice[2:N,]) / as.data.frame(closingprice[1:(N-1),]) - 1
+	mynames = strsplit(colnames(percentreturn), '.', fixed=TRUE)
+	mynames = lapply(mynames, function(x) return(paste0(x[1], ".PctReturn")))
+	colnames(percentreturn) = mynames
+	as.matrix(na.omit(percentreturn))
+}
+```
+
+Percent returns on the five ETFs.
+```{r}
+myreturns = YahooPricesToReturns(myprices)
+```
+
+
+### CAPM method for assessing risk
+
+Fitting the market model(SPY) to each stock.
+```{r}
+lm_TLT = lm(myreturns[,2]~myreturns[,1])
+lm_LQD = lm(myreturns[,3]~myreturns[,1])
+lm_EEM = lm(myreturns[,4]~myreturns[,1])
+lm_VNQ = lm(myreturns[,5]~myreturns[,1])
+```
+
+Estimate beta for each stock
+```{r,collapse=T}
+coef(lm_TLT)
+coef(lm_LQD)
+coef(lm_EEM)
+coef(lm_VNQ)
+
+```
+
+From the beta calculations, we see that EEM is the most risky, followed closely by VNQ. TLT and LQD are both very safe, and are even less riskier than SPY.
+
+#### Even Split Portfolio
+Simulating a 4 week period over many possible trading years
+```{r}
+n_days = 20
+set.seed(5)
+sim_even = foreach(i=1:5000, .combine='rbind') %do% {
+	totalwealth = 100000
+	weights = c(0.2, 0.2, 0.2, 0.2, 0.2)
+	holdings = weights * totalwealth
+	wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+	for(today in 1:n_days) {
+		return.today = resample(myreturns, 1, orig.ids=FALSE)
+		holdings = holdings + holdings*return.today
+		totalwealth = sum(holdings)
+		wealthtracker[today] = totalwealth
+		holdings = weights*totalwealth
+	}
+	wealthtracker
+}
+```
+
+Profit or loss histogram:
+```{r}
+hist(sim_even[,n_days]- 100000,main="Profit/Loss",xlab="Amount in Dollars")
+even.mean = mean(sim_even[,n_days]- 100000)
+```
+
+5% value at risk:
+```{r}
+even.var = quantile(sim_even[,n_days], 0.05) - 100000
+```
+
+### Risky Portfolio
+For the risky portfolio, I chose a 70-30 split over EEM and VNQ, the two most riskiest assets. I weighted EEM much higher in hopes of getting an outstanding return.
+
+Simulating a 4 week period over many possible trading years
+```{r}
+n_days = 20
+set.seed(5)
+sim_risky = foreach(i=1:5000, .combine='rbind') %do% {
+	totalwealth = 100000
+	weights = c(0, 0, 0, 0.7, 0.3)
+	holdings = weights * totalwealth
+	wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+	for(today in 1:n_days) {
+		return.today = resample(myreturns, 1, orig.ids=FALSE)
+		holdings = holdings + holdings*return.today
+		totalwealth = sum(holdings)
+		wealthtracker[today] = totalwealth
+		holdings = weights*totalwealth
+	}
+	wealthtracker
+}
+```
+
+Profit or loss histogram:
+```{r}
+hist(sim_risky[,n_days]- 100000,main="Profit/Loss",xlab="Amount in Dollars")
+risky.mean = mean(sim_risky[,n_days]- 100000)
+```
+
+5% value at risk:
+```{r}
+risky.var = quantile(sim_risky[,n_days], 0.05) - 100000
+```
+
+### Safe Portfolio
+For the safer portfolio, I chose a 25-25-50 split over SPY, LQD, and TLT, the three safest assets. I weighted TLT the most since it is the safest asset, but I weighted the other two at 25 in hopes of obtaining a decent return.
+
+Simulating a 4 week period over many possible trading years
+```{r}
+n_days = 20
+set.seed(5)
+sim_safe = foreach(i=1:5000, .combine='rbind') %do% {
+	totalwealth = 100000
+	weights = c(.25, .25, 0.5, 0, 0)
+	holdings = weights * totalwealth
+	wealthtracker = rep(0, n_days) # Set up a placeholder to track total wealth
+	for(today in 1:n_days) {
+		return.today = resample(myreturns, 1, orig.ids=FALSE)
+		holdings = holdings + holdings*return.today
+		totalwealth = sum(holdings)
+		wealthtracker[today] = totalwealth
+		holdings = weights*totalwealth
+	}
+	wealthtracker
+}
+```
+
+Profit or loss histogram:
+```{r}
+hist(sim_safe[,n_days]- 100000,main="Profit/Loss",xlab="Amount in Dollars")
+safe.mean = mean(sim_safe[,n_days]- 100000)
+```
+
+5% value at risk:
+```{r}
+safe.var = quantile(sim_safe[,n_days], 0.05) - 100000
+```
+
+Results of each portfolio compiled
+```{r,echo = F}
+results = matrix(c(even.mean,risky.mean,safe.mean,even.var,risky.var,safe.var),ncol=3,byrow=T)
+rownames(results) = c("Mean Profit/Loss","5% VAR")
+colnames(results) = c("Even","Risky","Safe")
+```
+
+From this results table, we can see the mean profit/loss and 5% value at risk for each portfolio. As expected, the 5% value at risk is the lowest for the safest portfolio and highest for the risky one. What's interesting, however, is that the mean profit is the highest for the even split portfolio. All of the portfolios return a profit, but the even split portfolio beats out the safe one by a small amount. The risky portfolio has returns that are around $300 less than the other two.
+
+
+## Clustering and PCA
+
+Load the data set:
+```{r}
+wine = read.csv('https://raw.githubusercontent.com/jgscott/STA380/adad8c24bed24f02ce13fd37f36f95755a32308f/data/wine.csv',header=T)
+attach(wine)
+wine.df = data.frame(wine)
+```
+
+Run principal component analysis:
+```{r}
+wine.num = wine.df[,1:11]
+pcawine = prcomp(wine.num,scale=T)
+summary(pcawine)
+loadings = pcawine$rotation
+scores = pcawine$x
+```
+Plot of component 2 vs. component 1, colored by wine color.
+```{r}
+qplot(scores[,1], scores[,2], color=wine$color, xlab='Component 1', ylab='Component 2')
+```
+
+From this plot, we can see a clear distinction between the red and white wines. The first two principal components have managed to identify a region for the white wine and a region for the red ones based on their chemical properties. 
+
+Hierarchical clustering:
+```{r}
+wine_scaled = scale(wine.num, center=TRUE, scale=TRUE) 
+wine_distance = dist(wine_scaled, method='euclidean')
+hier_wine = hclust(wine_distance, method='complete')
+cluster1 = cutree(hier_wine, k=10)
+summary(factor(cluster1))
+```
+
+Choosing a k of 10, there seems to be three main clusters. Looking into each cluster and checking the color of the wine in each:
+```{r}
+indx1 = which(cluster1 == 1)
+indx2 = which(cluster1 == 2)
+indx3 = which(cluster1 == 6)
+table(color[indx1])
+table(color[indx2])
+table(color[indx3])
+```
+
+We can see that the first cluster is one that is almost all red wines. Cluster six is almost exclusively white wines. Cluster two, however, doesn't seem very good. Although it contains predominantly white wine, there is still a significant amount of red wines in the cluster. To improve the accuracy, we would have to increase k and create even more clusters, which isn't every efficient. Since a large number of the 10 clusters aren't very significant (containing only a few wines each), increasing the amount of clusters would be equivalent to "over fitting" the data.
+
+Comparing PCA and hierarchical clustering, I would have to say that PCA does the best job in determining wine color.
+
+
+Now, to see if PCA can also sort the wine based on quality:
+```{r}
+qplot(scores[,1], scores[,2], color=as.factor(wine$quality), xlab='Component 1', ylab='Component 2')
+```
+
+From the plot, there doesn't seem to be any patterns regarding the quality of wine. Part of this is due to the difficulty in distinguishing each data point from each other. Rather than looking at each quality of rating, we can split the ratings into high quality (>5) and low quality (<=5) categories. Plotting again with this change:
+```{r}
+masked = NULL
+for (x in 1:nrow(wine.num)){
+  if (wine$quality[x] <= 5) {
+    masked[x] = 0
+  }
+  else {
+    masked[x] = 1
+  }
+}
+qplot(scores[,1], scores[,2], color=as.factor(masked), xlab='Component 1', ylab='Component 2')
+```
+
+Once again, there seems to be no distinction between the high and low quality wines. Although PCA was an excellent method for distinguishing wine color, it was unable to do the same for wine quality.
+
+
+## Market Segmentation
+
+Load the data:
+```{r, message=F}
+market = read.csv('https://raw.githubusercontent.com/jgscott/STA380/adad8c24bed24f02ce13fd37f36f95755a32308f/data/social_marketing.csv',header = T,row.names = 1)
+```
+
+Normalize phrase counts to phrase frequencies:
+```{r}
+market.norm = market/rowSums(market)
+market.df = data.frame(market.norm)
+```
+
+Since the goal of the advertising firm is to hone NutrientH20's messaging, we want to try to segment their followers as best as possible. To start off, we can remove the uncategorized and chatter columns, since they don't help us identify segments at all. We can also remove the spam and adult columns, since they are most likely from bots. 
+```{r}
+market.filter = market.df[c(-1,-5,-35,-36)]
+```
+
+With this filtered data set, we can now attempt PCA:
+```{r}
+pcamarket = prcomp(market.filter,scale=T)
+summary(pcamarket)
+loadings_market = pcamarket$rotation
+scores_market = pcamarket$x
+```
+
+The summary tells us that roughly the first ten principal components have a standard deviation greater than one, which means that they are actually capturing some segment of the data set.
+
+
+Looking at each principal component to see what kind of "segments" are being captured:
+```{r}
+o1 = order(loadings_market[,1])
+colnames(market.filter)[tail(o1,5)]
+colnames(market.filter)[head(o1,5)]
+```
+
+This segment appears to be filled with parents since they tweet often about school and parenting. They aren't as interested in nutrition and personal fitness, which might be because they don't have time for it anymore. 
+
+
+```{r}
+o2 = order(loadings_market[,2])
+colnames(market.filter)[tail(o2,5)]
+colnames(market.filter)[head(o2,5)]
+```
+
+This segment definitely seems to be one of college students, perhaps majoring in something computer related. They are probably not big on exercise, and almost never tweet about nutrition, fitness, or the outdoors.
+
+
+```{r}
+o3 = order(loadings_market[,3])
+colnames(market.filter)[tail(o3,5)]
+colnames(market.filter)[head(o3,5)]
+```
+
+This segment seems to be the opposite of the previous one, with fitness, nutrition, and outdoors being their top tweets. They don't care much for fashion or beauty, and are probably health nuts.
+
+
+```{r}
+o4 = order(loadings_market[,4])
+colnames(market.filter)[tail(o4,5)]
+colnames(market.filter)[head(o4,5)]
+```
+
+This segment seems to represent the fashion bloggers, with the majority of their tweets being about beauty and fashion. 
+
+
+```{r}
+o5 = order(loadings_market[,5])
+colnames(market.filter)[tail(o5,5)]
+colnames(market.filter)[head(o5,5)]
+```
+
+This segment doesn't seem to have a distinct defining characteristic. It appears to be a casual user of Twitter, tweeting whatever they are interested in. The most popular tweets range from being about fashion, to online gaming and the news. 
+
+
+```{r}
+o6 = order(loadings_market[,6])
+colnames(market.filter)[tail(o6,5)]
+colnames(market.filter)[head(o6,5)]
+```
+
+This segment seems to be made up of a people who are interested in culture. They like arts and crafts, traveling, and tv/film. They aren't interested in online gaming, shopping, or family either.
+
+
+```{r}
+o7 = order(loadings_market[,7])
+colnames(market.filter)[tail(o7,5)]
+colnames(market.filter)[head(o7,5)]
+```
+
+This segment doesn't seem to have any defining characteristics either, outside of shared interests. They are interested in computers, traveling, dating, and sports as well. They don't tweet about art, music, or film and tv. 
+
+From the data above, we have identified some segments that NutrientH2O should try to look into. Some of the segments that stand out are the fashion bloggers, the health nuts, the college students, and the parents. The other segments might be worth looking into, but since they are mostly comprised of shared interests it may be hard to directly target them.
