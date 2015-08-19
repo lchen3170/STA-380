@@ -1,0 +1,381 @@
+---
+title: "Chen, Leon - Exercises 2"
+output:
+  md_document:
+    variant: markdown_github
+---
+
+## Flights at ABIA
+
+```{r, message = F}
+library(ggplot2)
+library(plyr)
+```
+
+Read in data.
+```{r,message = F}
+flight = read.csv("https://raw.githubusercontent.com/jgscott/STA380/master/data/ABIA.csv")
+flight = data.frame(flight)
+```
+
+Add a column for total delay, which is the combined arrival and departure delay.
+```{r}
+total_delay = flight$ArrDelay + flight$DepDelay
+total_delay[is.na(total_delay)] = 0
+flight["TotalDelay"] = total_delay
+```
+
+```{r,echo = F}
+box <- qplot(x = as.factor(flight$DayOfWeek), y = flight$TotalDelay, data = flight, fill = as.factor(flight$DayOfWeek)) + geom_boxplot() 
+
+# grab extremes of boxplots
+ylim1 = boxplot.stats(flight$TotalDelay)$stats[c(1, 5)]
+
+# scale y limits based on extremes
+p1 = box + coord_cartesian(ylim = ylim1*1.05) + scale_fill_brewer()
+p1
+```
+
+From this plot, we can see that Thursdays and Fridays have the worst delays, and Saturday is the best day to fly.
+
+
+```{r,echo = F}
+box2 <- qplot(x = as.factor(flight$Month), y = flight$TotalDelay, data = flight, fill = as.factor(flight$Month)) + geom_boxplot()
+
+# scale y limits based on extremes
+p2 = box2 + coord_cartesian(ylim = ylim1*1.05) + scale_fill_brewer(palette = "Set3")
+p2
+```
+
+From this plot, we can see that the worst delays are in March and December. This probably corresponds to Spring and Winter break, as well as inclement weather in the Winter. The best months to fly in would be September through November.  
+
+
+
+## Author Attribution
+
+```{r, message = F}
+library(tm)
+library(SnowballC)
+library(glmnet)
+```
+
+### Naive Bayes Model
+
+Read in directory of authors for training.
+```{r}
+author_dirs = Sys.glob('../data/ReutersC50/C50train/*')
+file_list = NULL
+labels = NULL
+for(author in author_dirs) {
+	author_name = substring(author, first=29)
+	files_to_add = Sys.glob(paste0(author, '/*.txt'))
+	file_list = append(file_list, files_to_add)
+	labels = append(labels, rep(author_name, length(files_to_add)))
+}
+```
+
+Function to read plain text documents in English.
+```{r}
+readerPlain = function(fname){
+				readPlain(elem=list(content=readLines(fname)), 
+							id=fname, language='en') }
+```
+
+Remove the .txt from end of file names.
+```{r, message = F}
+all_docs = lapply(file_list, readerPlain) 
+names(all_docs) = file_list
+names(all_docs) = sub('.txt', '', names(all_docs))
+
+my_corpus = Corpus(VectorSource(all_docs))
+names(my_corpus) = labels
+```
+
+Preprocess the documents.
+```{r, message = F}
+my_corpus = tm_map(my_corpus, content_transformer(tolower)) # make everything lowercase
+my_corpus = tm_map(my_corpus, content_transformer(removeNumbers)) # remove numbers
+my_corpus = tm_map(my_corpus, content_transformer(removePunctuation)) # remove punctuation
+my_corpus = tm_map(my_corpus, content_transformer(stripWhitespace)) # remove excess white-space
+my_corpus = tm_map(my_corpus,stemDocument)   # stem the document 
+my_corpus = tm_map(my_corpus, content_transformer(removeWords), stopwords("SMART"))    # remove smart words
+```
+
+Create Document Term Matrix
+```{r,message = F}
+DTM = DocumentTermMatrix(my_corpus)
+```
+
+Set a threshold for the amount of documents a term has to be in for it to be relevant (>5).
+```{r, message = F}
+DTM = removeSparseTerms(DTM, 0.995)
+```
+
+Turn the DTM into a matrix.
+```{r}
+X = as.matrix(DTM)
+```
+
+Apply Laplace smoothing and create a matrix of the multinomial log probability vector for each author.
+```{r}
+smooth_count = 1/nrow(X)        # smoothing constant
+X2 = rowsum(X + smooth_count,group = labels)
+X2 = X2/rowSums(X2)
+logX2 = log(X2)        #log probabilities 
+```
+
+
+Need to deal with words in the documents that weren't in the train sets. 
+
+Read in directory of authors for testing.
+```{r, message = F}
+author_dirs = Sys.glob('../data/ReutersC50/C50test/*')
+file_list = NULL
+labels = NULL
+for(author in author_dirs) {
+	author_name = substring(author, first=28)
+	files_to_add = Sys.glob(paste0(author, '/*.txt'))
+	file_list = append(file_list, files_to_add)
+	labels = append(labels, rep(author_name, length(files_to_add)))
+}
+
+#Remove the .txt from end of file names.
+
+all_docs = lapply(file_list, readerPlain) 
+names(all_docs) = file_list
+names(all_docs) = sub('.txt', '', names(all_docs))
+
+my_corpus2 = Corpus(VectorSource(all_docs))
+names(my_corpus2) = labels
+
+#Preprocess the documents.
+
+my_corpus2 = tm_map(my_corpus2, content_transformer(tolower)) # make everything lowercase
+my_corpus2 = tm_map(my_corpus2, content_transformer(removeNumbers)) # remove numbers
+my_corpus2 = tm_map(my_corpus2, content_transformer(removePunctuation)) # remove punctuation
+my_corpus2 = tm_map(my_corpus2, content_transformer(stripWhitespace)) # remove excess white-space
+my_corpus2 = tm_map(my_corpus2, stemDocument)  # stem the document
+my_corpus2 = tm_map(my_corpus2, content_transformer(removeWords), stopwords("SMART"))  # remove stop words
+
+
+#Create Document Term Matrix
+DTM2 = DocumentTermMatrix(my_corpus2)
+
+#Set a threshold for the amount of documents a term has to be in for it to be relevant (>5).
+DTM2 = removeSparseTerms(DTM2, 0.995)
+
+#Turn the DTM into a matrix.
+Xtest = as.matrix(DTM2)
+
+```
+
+Make modifications to the training and test matrices.
+```{r,message=F}
+
+#Find all words in the test set that aren't in the training set and store them.
+remove_test = NULL
+for (word in colnames(Xtest)) {
+  if (!word %in% colnames(logX2)) {
+    remove_test = c(remove_test,word) 
+  }
+}
+
+#Find all words in the training set that aren't in the test set and store them.
+remove_train = NULL
+for (word in colnames(logX2)) {
+  if (!word %in% colnames(Xtest)) {
+    remove_train = c(remove_train,word)
+  }
+}
+
+#Create test and training matrices with the words removed.
+Xtest_final = Xtest[, !colnames(Xtest) %in% remove_test]
+
+#Create a matrix of zeros to attach onto test matrix for words in training set that aren't in the test set.
+add = matrix(0,nrow(Xtest),length(remove_train))
+
+#Name the columns of zeros with the missing words.
+colnames(add) = remove_train
+Xtest2 = cbind(Xtest_final,add)
+
+#Reorder the test matrix so that the words are in the same order as the test set.
+new_order = order(colnames(Xtest2))
+Xtest_final = Xtest2[,new_order]
+Xtrain_final = logX2
+```
+
+Run calculations to determine the predicted authors, and the accuracy of the model.
+```{r}
+#Calculate the log probabilities through matrix multiplication, resulting in a matrix with document authors as rows, and the multinomial probability vector for each author as columns.   
+logprobs = Xtest_final %*% t(Xtrain_final)
+
+#Find the max in each row to see which author the model predicted the document to have.
+max_col_names = colnames(logprobs)[max.col(logprobs)]
+match = cbind(rownames(logprobs),max_col_names)
+match = data.frame(match)
+names(match) = c("actual","predicted")
+
+#Use zeros and ones to represent whether or not the model prediction was correct.
+matches = as.integer(max_col_names == rownames(logprobs)) 
+#acc = cbind.data.frame(rownames(logprobs),matches)
+acc = cbind.data.frame(rownames(logprobs),max_col_names, matches)
+names(acc) = c("actual","predicted","matches")
+
+#Take the mean of the zeros and ones for each author to see the accuracy of the model for each author.
+acc_rate = cbind.data.frame(colnames(logprobs),colMeans(matrix(matches,50)))
+names(acc_rate) = c("author","acc_perc")
+
+#Accuracy of the entire model.
+mean(acc_rate[,2])
+```
+
+The Naive Bayes model gives an accuracy of about 63%.
+
+
+Identify authors who were difficult to distinguish.
+```{r}
+#Get counts and proportions of predictions for each document.
+mis_pred = ddply(acc, .(actual), transform, sum = length(actual))
+mis_pred_prop = ddply (mis_pred, .(actual, predicted), summarise, n = length(predicted), prop = n/sum[1])
+
+#Identify the authors who had a prediction rate of less than 50%.
+match_count = mis_pred_prop[mis_pred_prop$actual == mis_pred_prop$predicted,]
+low_acc = match_count[match_count$prop < 0.5,]
+
+#Only look at authors whose prediction rates are less than 50%.
+mis_pred_prop[(mis_pred_prop$actual %in% low_acc$actual),]
+```
+
+From this, we can see which authors were difficult to distinguish from one another. Alan Crosby was frequently identified as John Mastrini, about 32% of the time. Benjamin Kang Lim was also often mistaken as Jane Macartney and William Kazer. Darren Schuettler was very difficult to identify, as the model predicted his articles to be written by Heath Scoffield 70% of the time. David Lawder was thought to be Todd Nissen more than 50% of the time. Heather Scoffield was difficult to identify in general, as the model only predicted her correctly 38% of the times. James Macartney was mistakenly identified as Scott Hillis over 50% of the time. Jan Lopatka was frequently thought to be John Mastrini. Scott Hillis was also frequently identified as James Macartney, which means both authors must have very similar styles/word choice. Tan Ee Lyn was frequently mistaken for Peter Humphrey and Sarah Davison.
+
+
+
+### Generalized Linear Model
+
+Cross Validation
+```{r,message = F}
+#Set up training and test sets from the training matrix.
+cv_train = X[seq(1,2500,by = 2),]
+cv_test = X[-seq(1,2500,by = 2),]
+y_cv = rownames(cv_test)
+
+#Increase the number of principal components considered by 250 each time.
+k_list = seq(0,1000,by = 250)
+pc_cv = prcomp(cv_train, scale=TRUE)
+
+#Run the cross validation
+cv_result = NULL
+counter = 1
+
+set.seed(5)
+for (k in k_list[-1]) {
+  V_cv = pc_cv$rotation[,1:k]
+  score_cv = cv_train %*% V_cv
+  glm_cv = glmnet(score_cv,as.factor(y_cv) ,family = "multinomial", alpha = 0)
+  test_score_cv = cv_test %*% V_cv
+  glm_cv_pred = predict(glm_cv,test_score_cv,type = "class", s = 0)
+  cv_result[counter] = mean(as.integer(y_cv == glm_cv_pred))
+  counter = counter + 1
+}
+
+#Select the k that gave the best prediction.
+bestk = k_list[-1][which.max(cv_result)]
+```
+
+
+PCA & Multinomial Logistic Regression
+```{r}
+#Run PCA on the document term matrix.
+y = rownames(X)
+pc_author = prcomp(X, scale=TRUE)
+
+#Transform the DTM using the PCA results and then run the multinomial logistic regression.
+V = pc_author$rotation[,1:bestk]
+scores = X %*% V
+glm_author = glmnet(scores,as.factor(y) ,family = "multinomial", alpha = 0)
+
+#Use the model to predict on the transformed test DTM.
+test_pc = Xtest_final %*% V
+glm_pred = predict(glm_author,test_pc,type = "class", s = 0)
+
+#Model overall accuracy.
+mean(as.integer(y == glm_pred))
+```
+
+Multinomial Logistic Regression with PCA had an accuracy of about 65%.
+
+
+Identify authors who were difficult to distinguish in the multinomial logistic regression.
+```{r}
+#Data frame of actual author and predicted author.
+matches2 = as.integer(glm_pred == rownames(Xtest_final)) 
+match2 = cbind.data.frame(labels,glm_pred,matches2)
+names(match2) = c("actual","predicted","match")
+
+#Get counts and proportions of predictions for each document.
+mis_pred2 = ddply(match2,.(actual),transform, sum = length(actual))
+mis_pred_prop2 = ddply (mis_pred2, .(actual, predicted), summarise, n = length(predicted), prop = n/sum[1])
+
+#Identify the authors who had a prediction rate of less than 50%.
+match_count2 = mis_pred_prop2[mis_pred_prop2$actual == mis_pred_prop2$predicted,]
+low_acc2 = match_count2[match_count2$prop < 0.5,]
+
+#Only look at authors whose prediction rates are less than 50%.
+mis_pred_prop2[(mis_pred_prop2$actual %in% low_acc2$actual),]
+```
+
+Alexander Smith was often mistaken to be Joe Ortiz. Benjamin Kang Lim was still difficult to predict, with the model being successful only 26% of the time. Darren Schuettler was still mistakenly identified as Heather Scoffield, about 70% of the time. David Lawder was also still difficult to distinguish from Todd Nissen. Heather Scoffield was similarly mistaken for Darren Schuettler. Jane Macartney was difficult to identify, with a model accuracy of only 22%. Scott Hillis was similar, with a model accuracy of 14%. William Kazer had a low prediction rate as well, only about 36%. 
+
+Out of the two models, I would prefer the Naive Bayes model. Since the accuracies were roughly the same, no model is definitively better than the other. Therefore, I would choose the computationally simpler model, which is Naive Bayes. The cross validation in the PCA and Multinomial Logistic Regression model is very computationally expensive, and took a long time to run. Additionally, if the data set was larger, running the principal component analysis as well as the multinomial logistic regression would use a lot of memory.
+
+
+
+## Practice with association rule mining
+
+```{r,message=F}
+library(arules)
+library(reshape)
+```
+
+Read in data as a transaction object.
+```{r, message = F}
+grocery = read.transactions("https://raw.githubusercontent.com/jgscott/STA380/master/data/groceries.txt",format="basket",sep=",")
+```
+
+Running the 'apriori' algorithm.
+Look at rules with support > .001 & confidence >.6 & length (# items) <= 4.
+We are using a low support in order to capture more rules. When inspecting, we can simply inspect the rules with higher supports. We also want confidence to be fairly high, and so it is set higher than 0.5 since the lower support is already increasing the number of rules. 
+```{r,message=F}
+grocrules <- apriori(grocery,parameter=list(support=.001, confidence=.6, maxlen=4))
+```
+
+
+
+### Inspect the rules at different levels of support and lift.
+
+```{r}
+inspect(subset(grocrules, subset = support > 0.005))
+```
+
+With a support greater than .005, we see that for various combinations of groceries, it is likely that whole milk will also be bought. 
+
+
+```{r}
+inspect(subset(grocrules, subset=lift > 5 & support > 0.002))
+```
+
+With lift greater than 5 and support greater than .002, we see four different combinations of groceries that will likely also have root vegetables bought with them. The four different combinations seem to be made up of either meat, vegetables, or fruits.
+
+
+```{r}
+inspect(subset(grocrules, subset=lift > 5))
+```
+
+When we only look at rules with lift > 5, we see over 100 rules. These represent the more unique baskets, since the support is so low. A common trend is that there seems to be a lot of basket combinations that lead to the purchase of either yogurt or root vegetables.
+
+
+```{r}
+inspect(subset(grocrules, subset=lift > 5 & confidence > 0.8))
+```
+
+Since confidence can be skewed by a small sample size, we correct for it with a decent lift. This gives us some interesting grocery combinations, a lot of which would lead to the purchase of yogurt. We also see a rule that makes a lot of sense: those who buy liquor and red/blush wine will probably also buy bottled beer.
