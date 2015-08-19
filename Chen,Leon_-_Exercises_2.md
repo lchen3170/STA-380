@@ -10,14 +10,13 @@ Read in data.
 
 ``` r
 flight = read.csv("https://raw.githubusercontent.com/jgscott/STA380/master/data/ABIA.csv")
-attach(flight)
 flight = data.frame(flight)
 ```
 
 Add a column for total delay, which is the combined arrival and departure delay.
 
 ``` r
-total_delay = ArrDelay + DepDelay
+total_delay = flight$ArrDelay + flight$DepDelay
 total_delay[is.na(total_delay)] = 0
 flight["TotalDelay"] = total_delay
 ```
